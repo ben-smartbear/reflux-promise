@@ -1,3 +1,7 @@
+/* eslint-disable new-cap */
+/* eslint-disable no-mixed-requires */
+/* eslint-disable no-undef */
+/* eslint-disable quotes */
 var chai = require('chai'),
     assert = chai.assert,
     Reflux = require('reflux-core'),
@@ -56,7 +60,27 @@ describe('Creating actions using promises', function() {
 
         var actionNames, actions;
 
+        var resolvedPromise = function() {
+            var args = Array.prototype.slice.call(arguments, 0);
+            var deferred = Q.defer();
+            setTimeout(function() {
+                deferred.resolve(args);
+            }, 0);
+            return deferred.promise;
+        };
+
+        var rejectedPromise = function() {
+            var args = Array.prototype.slice.call(arguments, 0);
+            var deferred = Q.defer();
+            setTimeout(function() {
+                deferred.reject('error');
+            }, 0);
+            return deferred.promise;
+        };
+
         beforeEach(function () {
+
+
             actionNames = [
                 'foo',
                 'bar',
@@ -64,13 +88,23 @@ describe('Creating actions using promises', function() {
                 {
                     anotherFoo: { asyncResult: true },
                     anotherBar: { children: ['wee'] }
-                }];
+                },
+                {
+                    foobar: {
+                        asyncResult: true,
+                        withPromise: rejectedPromise
+                    },
+                    barfoo: {
+                        withPromise: resolvedPromise
+                    }
+                }
+
+            ];
             actions = Reflux.createActions(actionNames);
         });
 
         describe('when promising an async action created this way', function() {
             var promise;
-
             beforeEach(function() {
                 // promise resolves on baz.completed
                 promise = Q.promise(function(resolve) {
@@ -80,16 +114,7 @@ describe('Creating actions using promises', function() {
                 });
 
                 // listen for baz and return a promise
-                actions.baz.listenAndPromise(function() {
-                    var args = Array.prototype.slice.call(arguments, 0);
-                    var deferred = Q.defer();
-
-                    setTimeout(function() {
-                        deferred.resolve(args);
-                    }, 0);
-
-                    return deferred.promise;
-                });
+                actions.baz.listenAndPromise(resolvedPromise);
             });
 
             it('should invoke the completed action with the correct arguments', function() {
@@ -99,6 +124,102 @@ describe('Creating actions using promises', function() {
                 return assert.eventually.deepEqual(promise, testArgs);
             });
         });
+
+        describe('when using withPromise on an action', function() {
+            var withPromiseResult;
+            var promise;
+            beforeEach(function() {
+
+                // promise resolves on anotherFoo.completed
+                promise = Q.promise(function(resolve) {
+                    actions.anotherFoo.completed.listen(function(){
+                        resolve.apply(null, arguments);
+                    }, {}); // pass empty context
+                });
+
+                //Bind promise and return action
+                withPromiseResult = actions.anotherFoo.withPromise(resolvedPromise);
+            });
+
+            it('should return the same action that completes correctly when called', function() {
+                var testArgs = [1337, 'test'];
+                withPromiseResult(testArgs[0], testArgs[1]);
+
+                return assert.eventually.deepEqual(promise, testArgs);
+            });
+        });
+
+        describe('when creating an action with a withPromise definition', function() {
+            var foobarPromise, barfooPromise;
+            beforeEach(function() {
+                // promise resolves on anotherFoo.completed
+                foobarPromise = Q.promise(function(resolve) {
+                    actions.foobar.failed.listen(function(){
+                        resolve.apply(null, arguments);
+                    }, {}); // pass empty context
+                });
+
+                // promise resolves on anotherFoo.completed
+                barfooPromise = Q.promise(function(resolve) {
+                    actions.barfoo.completed.listen(function(){
+                        resolve.apply(null, arguments);
+                    }, {}); // pass empty context
+                });
+            });
+
+            it('should bind the promises as if the withPromise method had been used', function() {
+                actions.foobar();
+                return assert.eventually.deepEqual(foobarPromise, 'error');
+            });
+
+            it('should bind the promises even if asyncResult is not defined', function() {
+                var testArgs = [1337];
+                actions.barfoo(testArgs[0]);
+                return assert.eventually.deepEqual(barfooPromise, testArgs);
+            });
+
+
+        });
+
     });
 
+});
+
+describe('Promise catch error handler', function () {
+    var actions, actionNames, errPromiseResolve;
+
+    var errPromise = Q.Promise(function(resolve, reject) {
+        // errPromise resolve function is exposed
+        errPromiseResolve = resolve;
+    });
+
+    // when errorHandler is called,
+    // errPromise gets resolved with the error object
+    var errorHandler = function(err) {
+        errPromiseResolve(err);
+    };
+
+    Reflux.use(RefluxPromise(Q.Promise, errorHandler));
+
+    actionNames = { 'foo': { asyncResult: true }};
+    actions = Reflux.createActions(actionNames);
+
+    it('should be called with error when action promise throws', function() {
+        var actionError = new Error('action error');
+        var actionPromise = Q.Promise(function(resolve, reject) {
+            throw actionError;
+            resolve('bar');
+        });
+
+        actions.foo.listenAndPromise(function() {
+            return actionPromise;
+        });
+
+        actions.foo();
+
+        return Q.all([
+            assert.isRejected(actionPromise, actionError, "actionPromsie not rejected with error"),
+            assert.becomes(errPromise, actionError, "error handler not executed with thrown error"),
+        ]);
+    });
 });

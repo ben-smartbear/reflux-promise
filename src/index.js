@@ -1,4 +1,4 @@
-function createFunctions(Reflux, PromiseFactory) {
+function createFunctions(Reflux, PromiseFactory, catchHandler) {
 
     const _ = Reflux.utils;
 
@@ -61,9 +61,10 @@ function createFunctions(Reflux, PromiseFactory) {
             }
         });
 
-        // Ensure that the promise does trigger "Uncaught (in promise)" errors in console if no error handler is added
-        // See: https://github.com/reflux/reflux-promise/issues/4
-        createdPromise.catch(function() {});
+        // Attach promise catch handler if provided
+        if (typeof (catchHandler) === "function") {
+            createdPromise.catch(catchHandler);
+        }
 
         return createdPromise;
     }
@@ -121,21 +122,47 @@ function createFunctions(Reflux, PromiseFactory) {
 
     }
 
+    /**
+     * Subscribes the given callback for action triggered, which should
+     * return a promise that in turn is passed to `this.promise`
+     *
+     * @param {Function} callback The callback to register as event handler
+     * @param {Mixed} [optional] bindContext The context to bind the callback with
+     * @returns {Action} Subscribed action to facilitate chaining on actions definitions
+     */
+     function withPromise(callback, bindContext) {
+         this.listenAndPromise(callback, bindContext);
+         return this;
+     }
+
     return {
         triggerPromise: triggerPromise,
         promise: promise,
-        listenAndPromise: listenAndPromise
+        listenAndPromise: listenAndPromise,
+        withPromise: withPromise
     };
 }
 
 /**
  * Sets up reflux with Promise functionality
  */
-export default function(promiseFactory) {
+export default function(promiseFactory, catchHandler) {
     return function(Reflux) {
-        const { triggerPromise, promise, listenAndPromise } = createFunctions(Reflux, promiseFactory);
+        const { triggerPromise, promise, listenAndPromise, withPromise } = createFunctions(Reflux, promiseFactory, catchHandler);
         Reflux.PublisherMethods.triggerAsync = triggerPromise;
         Reflux.PublisherMethods.promise = promise;
         Reflux.PublisherMethods.listenAndPromise = listenAndPromise;
+        Reflux.PublisherMethods.withPromise = withPromise;
+
+        const createAction = Reflux.createAction;
+        Reflux.createAction = function(definition){
+            if (definition.withPromise) {
+                const promise = definition.withPromise;
+                definition.asyncResult = true;
+                delete definition.withPromise;
+                return createAction(definition).withPromise(promise);
+            }
+            return createAction(definition);
+        };
     };
 }
